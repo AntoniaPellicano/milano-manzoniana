@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Milano Manzoniana — Esperienza WebXR</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #1a1410; font-family: 'Georgia', serif; }
+    canvas { display: block; }
+
+    #loading {
+      position: fixed; inset: 0; z-index: 100;
+      background: #1a1410;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      transition: opacity 1s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #loading h1 { color: #d4a54a; font-size: 2.2rem; margin-bottom: 0.5rem; letter-spacing: 2px; }
+    #loading p { color: #a08860; font-size: 1rem; margin-bottom: 2rem; }
+    #loading .bar { width: 240px; height: 3px; background: #2a2218; border-radius: 2px; overflow: hidden; }
+    #loading .bar-fill { width: 0%; height: 100%; background: #d4a54a; transition: width 0.3s; }
+
+    #info-card {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      background: rgba(20, 16, 10, 0.94); border: 1px solid #d4a54a40;
+      border-radius: 12px; padding: 2rem 2.5rem; max-width: 420px; width: 90%;
+      z-index: 50; display: none; backdrop-filter: blur(12px);
+    }
+    #info-card.visible { display: block; animation: fadeIn 0.4s ease; }
+    #info-card h2 { color: #d4a54a; font-size: 1.3rem; margin-bottom: 0.6rem; }
+    #info-card p { color: #c4b08a; font-size: 0.95rem; line-height: 1.7; }
+    #info-card .close {
+      position: absolute; top: 12px; right: 16px;
+      color: #a08860; background: none; border: none; font-size: 1.4rem;
+      cursor: pointer;
+    }
+    #info-card .close:hover { color: #d4a54a; }
+    #info-card .epoca { color: #8a7a5a; font-size: 0.8rem; margin-top: 0.8rem; font-style: italic; }
+
+    #hud {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: rgba(20, 16, 10, 0.8); border: 1px solid #d4a54a30;
+      border-radius: 8px; padding: 10px 20px; z-index: 40;
+      color: #a08860; font-size: 0.8rem; text-align: center;
+      backdrop-filter: blur(8px);
+    }
+    #hud span { color: #d4a54a; }
+
+    #title-overlay {
+      position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+      z-index: 40; text-align: center; pointer-events: none;
+    }
+    #title-overlay h1 {
+      color: #d4a54a; font-size: 1.1rem; letter-spacing: 3px;
+      text-transform: uppercase; opacity: 0.7;
+    }
+    #title-overlay p { color: #8a7a5a; font-size: 0.75rem; margin-top: 4px; }
+
+    #crosshair {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 6px; height: 6px; border: 1.5px solid #d4a54a80;
+      border-radius: 50%; z-index: 30; pointer-events: none;
+    }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -48%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <h1>Milano Manzoniana</h1>
+  <p>XVII Secolo — Un viaggio nel tempo</p>
+  <div class="bar"><div class="bar-fill" id="load-bar"></div></div>
+</div>
+
+<div id="title-overlay">
+  <h1>Milano Manzoniana</h1>
+  <p>Esplora la Milano dei Promessi Sposi</p>
+</div>
+
+<div id="crosshair"></div>
+
+<div id="hud">
+  <span>WASD</span> muoviti &nbsp;&bull;&nbsp; <span>Mouse</span> guardati intorno &nbsp;&bull;&nbsp; <span>Click</span> interagisci con le sfere dorate
+</div>
+
+<div id="info-card">
+  <button class="close" onclick="closeCard()">&times;</button>
+  <h2 id="card-title"></h2>
+  <p id="card-text"></p>
+  <p class="epoca" id="card-epoca"></p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// === SCENE SETUP ===
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0806);
+scene.fog = new THREE.FogExp2(0x1a1410, 0.035);
+
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 1.7, 12);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.8;
+document.body.appendChild(renderer.domElement);
+
+// === MATERIALS ===
+const stoneMat = new THREE.MeshStandardMaterial({ color: 0x4a4035, roughness: 0.95 });
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x6b5d4e, roughness: 0.9 });
+const wallMat2 = new THREE.MeshStandardMaterial({ color: 0x5a4f42, roughness: 0.92 });
+const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 0.85 });
+const roofMat = new THREE.MeshStandardMaterial({ color: 0x6b3a2a, roughness: 0.88 });
+const metalMat = new THREE.MeshStandardMaterial({ color: 0x2a2520, roughness: 0.6, metalness: 0.7 });
+
+// === GROUND (cobblestone street) ===
+const groundGeo = new THREE.PlaneGeometry(12, 60, 24, 120);
+const posAttr = groundGeo.attributes.position;
+for (let i = 0; i < posAttr.count; i++) {
+  posAttr.setZ(i, (Math.random() - 0.5) * 0.06);
+}
+groundGeo.computeVertexNormals();
+const ground = new THREE.Mesh(groundGeo, stoneMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// cobblestone lines
+for (let z = -28; z < 28; z += 0.8) {
+  for (let x = -5; x < 5; x += 1.2) {
+    const ox = x + (Math.random() - 0.5) * 0.3;
+    const oz = z + (Math.random() - 0.5) * 0.2;
+    const lineGeo = new THREE.BoxGeometry(0.9 + Math.random() * 0.3, 0.02, 0.6 + Math.random() * 0.2);
+    const line = new THREE.Mesh(lineGeo, new THREE.MeshStandardMaterial({
+      color: new THREE.Color(0x3a3428).lerp(new THREE.Color(0x5a5040), Math.random()),
+      roughness: 0.95
+    }));
+    line.position.set(ox, 0.01, oz);
+    line.receiveShadow = true;
+    scene.add(line);
+  }
+}
+
+// === BUILDINGS ===
+function createBuilding(x, z, w, h, d, mat, hasBalcony) {
+  const group = new THREE.Group();
+
+  // main wall
+  const wallGeo = new THREE.BoxGeometry(w, h, d);
+  const wall = new THREE.Mesh(wallGeo, mat);
+  wall.position.y = h / 2;
+  wall.castShadow = true;
+  wall.receiveShadow = true;
+  group.add(wall);
+
+  // roof
+  const roofGeo = new THREE.BoxGeometry(w + 0.3, 0.3, d + 0.3);
+  const roof = new THREE.Mesh(roofGeo, roofMat);
+  roof.position.y = h + 0.15;
+  roof.castShadow = true;
+  group.add(roof);
+
+  // windows
+  const winMat = new THREE.MeshStandardMaterial({ color: 0x1a1508, roughness: 0.7 });
+  const winGlowMat = new THREE.MeshStandardMaterial({
+    color: 0xd4a040, emissive: 0xd4a040,
+    emissiveIntensity: Math.random() > 0.6 ? 0.3 : 0.0,
+    roughness: 0.5
+  });
+  const rows = Math.floor(h / 2.5);
+  const cols = Math.floor(w / 2.2);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const ww = 0.6, wh = 1.0;
+      const wx = -w / 2 + 1.2 + c * 2.2;
+      const wy = 1.8 + r * 2.5;
+      const useMat = Math.random() > 0.7 ? winGlowMat : winMat;
+
+      // window frame
+      const frameGeo = new THREE.BoxGeometry(ww + 0.15, wh + 0.15, 0.08);
+      const frame = new THREE.Mesh(frameGeo, darkWoodMat);
+      frame.position.set(wx, wy, d / 2 + 0.04);
+      group.add(frame);
+
+      // window glass
+      const winGeo = new THREE.BoxGeometry(ww, wh, 0.05);
+      const win = new THREE.Mesh(winGeo, useMat);
+      win.position.set(wx, wy, d / 2 + 0.08);
+      group.add(win);
+
+      // shutters
+      if (Math.random() > 0.4) {
+        const shutGeo = new THREE.BoxGeometry(0.08, wh, 0.3);
+        const shutL = new THREE.Mesh(shutGeo, darkWoodMat);
+        shutL.position.set(wx - ww / 2 - 0.04, wy, d / 2 + 0.2);
+        const shutR = shutL.clone();
+        shutR.position.x = wx + ww / 2 + 0.04;
+        group.add(shutL, shutR);
+      }
+    }
+  }
+
+  // door
+  const doorGeo = new THREE.BoxGeometry(1.2, 2.2, 0.1);
+  const door = new THREE.Mesh(doorGeo, darkWoodMat);
+  door.position.set(0, 1.1, d / 2 + 0.05);
+  group.add(door);
+
+  // door arch
+  const archGeo = new THREE.TorusGeometry(0.6, 0.1, 8, 12, Math.PI);
+  const arch = new THREE.Mesh(archGeo, stoneMat);
+  arch.position.set(0, 2.2, d / 2 + 0.05);
+  group.add(arch);
+
+  group.position.set(x, 0, z);
+  scene.add(group);
+  return group;
+}
+
+// left side buildings
+createBuilding(-8, -20, 5, 9, 5, wallMat, true);
+createBuilding(-8, -12, 5, 7, 5, wallMat2, false);
+createBuilding(-8, -4, 5, 10, 5, wallMat, true);
+createBuilding(-8, 4, 5, 8, 5, wallMat2, false);
+createBuilding(-8, 12, 5, 9, 5, wallMat, true);
+createBuilding(-8, 20, 5, 7, 5, wallMat2, false);
+
+// right side buildings
+createBuilding(8, -18, 5, 8, 5, wallMat2, false);
+createBuilding(8, -10, 5, 10, 5, wallMat, true);
+createBuilding(8, -2, 5, 7, 5, wallMat2, false);
+createBuilding(8, 6, 5, 9, 5, wallMat, true);
+createBuilding(8, 14, 5, 8, 5, wallMat2, false);
+createBuilding(8, 22, 5, 10, 5, wallMat, true);
+
+// === STREET LAMPS ===
+function createLamp(x, z) {
+  const group = new THREE.Group();
+
+  // pole
+  const poleGeo = new THREE.CylinderGeometry(0.04, 0.06, 3.2, 8);
+  const pole = new THREE.Mesh(poleGeo, metalMat);
+  pole.position.y = 1.6;
+  pole.castShadow = true;
+  group.add(pole);
+
+  // arm
+  const armGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.8, 6);
+  const arm = new THREE.Mesh(armGeo, metalMat);
+  arm.rotation.z = Math.PI / 2;
+  arm.position.set(0.35, 3.1, 0);
+  group.add(arm);
+
+  // lantern housing
+  const lanternGeo = new THREE.BoxGeometry(0.3, 0.4, 0.3);
+  const lantern = new THREE.Mesh(lanternGeo, new THREE.MeshStandardMaterial({
+    color: 0xd4a040, emissive: 0xd4a040, emissiveIntensity: 0.8,
+    roughness: 0.3, transparent: true, opacity: 0.85
+  }));
+  lantern.position.set(0.7, 3.1, 0);
+  group.add(lantern);
+
+  // point light
+  const light = new THREE.PointLight(0xd4a040, 1.8, 14, 2);
+  light.position.set(0.7, 3.0, 0);
+  light.castShadow = true;
+  light.shadow.mapSize.set(512, 512);
+  light.shadow.radius = 4;
+  group.add(light);
+
+  group.position.set(x, 0, z);
+  scene.add(group);
+  return { group, light };
+}
+
+const lamps = [];
+lamps.push(createLamp(-5, -14));
+lamps.push(createLamp(5, -6));
+lamps.push(createLamp(-5, 2));
+lamps.push(createLamp(5, 10));
+lamps.push(createLamp(-5, 18));
+
+// === AMBIENT LIGHTING ===
+const ambientLight = new THREE.AmbientLight(0x2a2540, 0.3);
+scene.add(ambientLight);
+
+const moonLight = new THREE.DirectionalLight(0x4466aa, 0.15);
+moonLight.position.set(5, 15, -10);
+scene.add(moonLight);
+
+// === DUST PARTICLES ===
+const dustCount = 800;
+const dustGeo = new THREE.BufferGeometry();
+const dustPos = new Float32Array(dustCount * 3);
+for (let i = 0; i < dustCount; i++) {
+  dustPos[i * 3] = (Math.random() - 0.5) * 12;
+  dustPos[i * 3 + 1] = Math.random() * 6;
+  dustPos[i * 3 + 2] = (Math.random() - 0.5) * 50;
+}
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+const dustMat = new THREE.PointsMaterial({ color: 0xd4a040, size: 0.03, transparent: true, opacity: 0.4 });
+const dust = new THREE.Points(dustGeo, dustMat);
+scene.add(dust);
+
+// === INTERACTIVE INFO POINTS ===
+const infoData = [
+  {
+    pos: new THREE.Vector3(-3, 1.8, -8),
+    title: "La Scighera",
+    text: "La celebre nebbia milanese, chiamata in dialetto \"scighera\", avvolgeva la città come un manto spesso, specialmente nelle notti autunnali e invernali. Manzoni la descrive come elemento atmosferico che contribuisce al senso di oppressione e mistero che pervade i capitoli ambientati nelle strade di Milano.",
+    epoca: "Milano, XVII Secolo — dall'ambientazione de I Promessi Sposi"
+  },
+  {
+    pos: new THREE.Vector3(3, 1.8, 0),
+    title: "I Promessi Sposi",
+    text: "Il romanzo di Alessandro Manzoni, pubblicato nella sua versione definitiva nel 1842, è ambientato nella Milano del 1628-1630. Queste strade raccontano la storia di Renzo e Lucia, del loro amore ostacolato da Don Rodrigo, e della peste che devastò la città. È considerato il più importante romanzo della letteratura italiana.",
+    epoca: "Prima edizione 1827, edizione definitiva 1840-1842"
+  },
+  {
+    pos: new THREE.Vector3(-3, 1.8, 8),
+    title: "La Peste del 1630",
+    text: "La grande peste del 1630 decimò la popolazione milanese, uccidendo circa la metà degli abitanti della città. Manzoni dedica alcuni dei capitoli più intensi del romanzo alla descrizione dell'epidemia, dei lazzaretti e della disperazione collettiva. I \"monatti\" raccoglievano i corpi nelle strade con i loro carri.",
+    epoca: "1629-1631 — La peste manzoniana"
+  },
+  {
+    pos: new THREE.Vector3(3, 1.8, 16),
+    title: "Il Lazzaretto",
+    text: "Il Lazzaretto di Milano era un vasto edificio quadrilatero fuori Porta Orientale, utilizzato come ospedale per gli appestati. Manzoni lo descrive come un luogo di sofferenza ma anche di carità, dove Fra Cristoforo presta la sua opera di assistenza. Oggi ne resta solo un piccolo frammento lungo via San Gregorio.",
+    epoca: "Costruito nel 1488, demolito quasi interamente nel XIX Secolo"
+  }
+];
+
+const infoSpheres = [];
+const sphereGeo = new THREE.SphereGeometry(0.15, 16, 16);
+const sphereGlowGeo = new THREE.SphereGeometry(0.25, 16, 16);
+
+infoData.forEach(info => {
+  const group = new THREE.Group();
+
+  const sphere = new THREE.Mesh(sphereGeo, new THREE.MeshStandardMaterial({
+    color: 0xd4a040, emissive: 0xd4a040, emissiveIntensity: 0.6,
+    roughness: 0.2, metalness: 0.5
+  }));
+  group.add(sphere);
+
+  const glow = new THREE.Mesh(sphereGlowGeo, new THREE.MeshBasicMaterial({
+    color: 0xd4a040, transparent: true, opacity: 0.15
+  }));
+  group.add(glow);
+
+  const pointLight = new THREE.PointLight(0xd4a040, 0.5, 4);
+  group.add(pointLight);
+
+  group.position.copy(info.pos);
+  group.userData = info;
+  scene.add(group);
+  infoSpheres.push(group);
+});
+
+// === FIRST PERSON CONTROLS ===
+const moveSpeed = 3;
+const lookSpeed = 0.002;
+const keys = {};
+let yaw = Math.PI;
+let pitch = 0;
+let isLocked = false;
+
+document.addEventListener('keydown', e => keys[e.code] = true);
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+renderer.domElement.addEventListener('click', () => {
+  if (!isLocked) {
+    renderer.domElement.requestPointerLock();
+  } else {
+    checkInteraction();
+  }
+});
+
+document.addEventListener('pointerlockchange', () => {
+  isLocked = document.pointerLockElement === renderer.domElement;
+});
+
+document.addEventListener('mousemove', e => {
+  if (!isLocked) return;
+  yaw -= e.movementX * lookSpeed;
+  pitch -= e.movementY * lookSpeed;
+  pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
+});
+
+// === INTERACTION ===
+const raycaster = new THREE.Raycaster();
+
+function checkInteraction() {
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  const intersects = raycaster.intersectObjects(
+    infoSpheres.flatMap(g => g.children), false
+  );
+  if (intersects.length > 0) {
+    const parent = intersects[0].object.parent;
+    if (parent && parent.userData && parent.userData.title) {
+      showCard(parent.userData);
+    }
+  }
+}
+
+function showCard(data) {
+  document.getElementById('card-title').textContent = data.title;
+  document.getElementById('card-text').textContent = data.text;
+  document.getElementById('card-epoca').textContent = data.epoca;
+  document.getElementById('info-card').classList.add('visible');
+  document.exitPointerLock();
+}
+
+function closeCard() {
+  document.getElementById('info-card').classList.remove('visible');
+  renderer.domElement.requestPointerLock();
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeCard();
+});
+
+// === ANIMATION LOOP ===
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  const time = clock.getElapsedTime();
+
+  // camera rotation
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+
+  // movement
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.y = 0;
+  forward.normalize();
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
+
+  if (keys['KeyW'] || keys['ArrowUp']) camera.position.addScaledVector(forward, moveSpeed * delta);
+  if (keys['KeyS'] || keys['ArrowDown']) camera.position.addScaledVector(forward, -moveSpeed * delta);
+  if (keys['KeyA'] || keys['ArrowLeft']) camera.position.addScaledVector(right, -moveSpeed * delta);
+  if (keys['KeyD'] || keys['ArrowRight']) camera.position.addScaledVector(right, moveSpeed * delta);
+
+  // keep within street bounds
+  camera.position.x = Math.max(-4.5, Math.min(4.5, camera.position.x));
+  camera.position.y = 1.7;
+  camera.position.z = Math.max(-25, Math.min(25, camera.position.z));
+
+  // animate info spheres (floating + pulsing)
+  infoSpheres.forEach((g, i) => {
+    g.position.y = g.userData.pos.y + Math.sin(time * 1.5 + i * 1.2) * 0.15;
+    g.children[1].scale.setScalar(1 + Math.sin(time * 2.5 + i) * 0.2);
+    g.children[1].material.opacity = 0.1 + Math.sin(time * 2 + i) * 0.08;
+  });
+
+  // animate dust
+  const dPositions = dust.geometry.attributes.position.array;
+  for (let i = 0; i < dustCount; i++) {
+    dPositions[i * 3 + 1] += Math.sin(time * 0.3 + i) * 0.002;
+    dPositions[i * 3] += Math.cos(time * 0.2 + i * 0.5) * 0.001;
+    if (dPositions[i * 3 + 1] > 6) dPositions[i * 3 + 1] = 0;
+  }
+  dust.geometry.attributes.position.needsUpdate = true;
+
+  // lamp flicker
+  lamps.forEach((l, i) => {
+    l.light.intensity = 1.6 + Math.sin(time * 3 + i * 2) * 0.2 + Math.random() * 0.1;
+  });
+
+  renderer.render(scene, camera);
+}
+
+// === LOADING ===
+let loadProgress = 0;
+const loadInterval = setInterval(() => {
+  loadProgress += Math.random() * 15 + 5;
+  if (loadProgress > 100) loadProgress = 100;
+  document.getElementById('load-bar').style.width = loadProgress + '%';
+  if (loadProgress >= 100) {
+    clearInterval(loadInterval);
+    setTimeout(() => {
+      document.getElementById('loading').classList.add('hidden');
+    }, 600);
+  }
+}, 200);
+
+// === RESIZE ===
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
